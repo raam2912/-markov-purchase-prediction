@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Data — raw and processed files are NOT committed (too large for GitHub)
+backend/data/raw/
+backend/data/processed/
+backend/data/pipeline.log
+
+# Reports (generated, not source)
+backend/data/reports/
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Model artifacts (will be versioned separately in Phase 2)
+*.pkl
+*.pt
+*.joblib

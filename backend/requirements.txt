@@ -1,0 +1,35 @@
+# AntiGrav — Markov Purchase Prediction
+# Python >= 3.11
+
+# ── Core data ─────────────────────────────────────────────────────────────────
+pandas>=2.2.0
+numpy>=1.26.0
+pyarrow>=15.0.0          # Parquet read/write
+openpyxl>=3.1.2          # XLSX parsing (UCI download)
+
+# ── Networking + retries ──────────────────────────────────────────────────────
+requests>=2.31.0
+tenacity>=8.2.3           # Retry logic with exponential backoff
+
+# ── Progress + CLI ────────────────────────────────────────────────────────────
+rich>=13.7.0              # Beautiful terminal output
+tqdm>=4.66.0              # Progress bars
+
+# ── Validation ────────────────────────────────────────────────────────────────
+pydantic>=2.6.0           # Config + schema validation
+
+# ── Outlier detection ─────────────────────────────────────────────────────────
+scipy>=1.12.0
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+loguru>=0.7.2
+
+# ── Date handling ─────────────────────────────────────────────────────────────
+python-dateutil>=2.9.0
+
+# ── Notebook + visualisation ─────────────────────────────────────────────────
+jupyter>=1.1.0
+notebook>=7.0.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+nbformat>=5.9.0
