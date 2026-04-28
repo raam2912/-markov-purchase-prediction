@@ -1,21 +1,20 @@
 """
-models/markov.py — First-Order Markov Chain for purchase prediction.
+models/markov.py — Markov Chain for purchase prediction (order 1 & 2).
 
-build_markov(sequences, order=1)
+build_markov(sequences, order=1|2)
   Input : list of sequences, each sequence = list of category strings
-  Output: MarkovModel object with a normalised transition probability dict
+  Output: MarkovModel (order=1) — state is a single category string
+          The model can also be used via Order2Adapter for a uniform API.
 
-predict_top_k(model, current_state, k=3)
-  Input : trained MarkovModel, current category string, k
-  Output: list of (category, probability) tuples, sorted descending
+Order-1: state = current category   (15 states, 15x15 matrix)
+Order-2: state = (prev, current)     (up to 225 states, 225x15 matrix)
+         Higher expressiveness at the cost of sparser states.
 
-Design decisions:
-  - Uses nested defaultdict — no need to allocate a full NxN matrix upfront.
-    With ~15 categories the matrix IS dense in practice, but the API is correct
-    for any number of states.
-  - Unseen states fall back to global unigram distribution (not uniform), 
-    so predictions are always meaningful.
-  - order=1 only for Phase 1. Higher orders (order=2) will be added in Phase 2.
+Both orders share the same MarkovModel dataclass. For order=2 the
+'current_state' passed to predict_top_k must be a tuple (prev, current).
+The Order2Adapter wraps a MarkovModel trained at order=2 so that it can
+be called with a plain string (it looks up the customer's previous purchase
+from a context dict and builds the tuple internally).
 """
 from __future__ import annotations
 
@@ -78,17 +77,22 @@ class MarkovModel:
 
     def coverage(self) -> float:
         """Fraction of all possible states that have observed transitions."""
-        if not self.categories:
+        n = len(self.categories)
+        if n == 0:
             return 0.0
-        return len(self.transitions) / len(self.categories)
+        # order=1: N states; order=2: up to N^2 states
+        possible_states = n if self.order == 1 else n * n
+        return min(1.0, len(self.transitions) / possible_states)
 
     def sparsity(self) -> float:
         """Fraction of transition matrix cells that are zero (or missing)."""
         n = len(self.categories)
         if n == 0:
             return 1.0
+        possible_states = n if self.order == 1 else n * n
         filled_cells = sum(len(v) for v in self.transitions.values())
-        return 1.0 - filled_cells / (n * n)
+        total_cells  = possible_states * n
+        return max(0.0, 1.0 - filled_cells / total_cells)
 
     def to_dataframe(self) -> pd.DataFrame:
         """Return transition matrix as a DataFrame (rows=from, cols=to)."""
@@ -134,10 +138,8 @@ def build_markov(
         raise ValueError("sequences must be non-empty.")
     if order < 1:
         raise ValueError(f"order must be >= 1, got {order}.")
-    if order > 1:
-        raise NotImplementedError(
-            "Higher-order Markov is planned for Phase 2. Use order=1 for now."
-        )
+    if order > 2:
+        raise NotImplementedError("Only order=1 and order=2 are supported.")
 
     # ── Count transitions ──────────────────────────────────────────────────────
     raw_counts: defaultdict[str, defaultdict[str, int]] = defaultdict(
@@ -153,12 +155,19 @@ def build_markov(
             continue
 
         for i in range(len(seq) - order):
-            from_state = seq[i]            # single category (order=1)
-            to_state   = seq[i + order]
+            if order == 1:
+                from_state: str | tuple = seq[i]
+            else:  # order == 2
+                from_state = (seq[i], seq[i + 1])
+            to_state = seq[i + order]
 
             raw_counts[from_state][to_state] += 1
             global_counts[to_state] += 1
-            all_categories.add(from_state)
+            if order == 1:
+                all_categories.add(from_state)      # type: ignore[arg-type]
+            else:
+                all_categories.add(from_state[0])   # type: ignore[index]
+                all_categories.add(from_state[1])   # type: ignore[index]
             all_categories.add(to_state)
             total_transitions += 1
 
@@ -239,19 +248,65 @@ def df_to_sequences(
     return sequences
 
 
+# ── Order-2 adapter (uniform API for evaluator) ──────────────────────────────
+
+class Order2Adapter:
+    """Wraps an order-2 MarkovModel so it can be called with a single string state.
+
+    The evaluator calls model.predict_categories(current_state, k=k) where
+    current_state is a plain category string. For order-2 we need (prev, current).
+    This adapter maintains a per-customer 'previous category' context that is
+    populated externally before evaluation.
+
+    Usage (in evaluator):
+        adapter = Order2Adapter(markov2_model)
+        adapter.set_context(prev_cat)            # set the previous category
+        preds = adapter.predict_categories(current_cat, k=3)
+    """
+
+    def __init__(self, model: MarkovModel) -> None:
+        assert model.order == 2, "Order2Adapter requires an order=2 MarkovModel."
+        self._model   = model
+        self._prev:   str | None = None
+
+    def set_context(self, prev_category: str) -> None:
+        self._prev = prev_category
+
+    def predict_categories(self, current_state: str, k: int = 3) -> list[str]:
+        if self._prev is not None:
+            state: str | tuple = (self._prev, current_state)
+        else:
+            state = current_state   # fall back to order-1 key (uses global dist)
+        return [cat for cat, _ in self._model.predict_top_k(state, k=k)]
+
+    def predict_top_k(self, current_state: str, k: int = 3) -> list[tuple[str, float]]:
+        if self._prev is not None:
+            state: str | tuple = (self._prev, current_state)
+        else:
+            state = current_state
+        return self._model.predict_top_k(state, k=k)
+
+    @property
+    def model(self) -> MarkovModel:
+        return self._model
+
+
 # ── Quick sanity check ────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Tiny test
-    toy_sequences = [
-        ["A", "B", "A", "C"],
-        ["A", "C", "B", "A"],
-        ["B", "A", "B", "C"],
-        ["C", "A", "B"],
+    toy = [
+        ["A", "B", "A", "C", "B"],
+        ["A", "C", "B", "A", "C"],
+        ["B", "A", "B", "C", "A"],
+        ["C", "A", "B", "C", "B"],
     ]
-    model = build_markov(toy_sequences, order=1)
-    print("\nTransition matrix:")
-    print(model.to_dataframe().round(3))
-    print("\nPredict from A:", model.predict_top_k("A", k=2))
-    print("Predict from X (unseen):", model.predict_top_k("X", k=2))
-    print("\nSummary:", json.dumps(model.summary(), indent=2))
+    m1 = build_markov(toy, order=1)
+    m2 = build_markov(toy, order=2)
+    print("Order-1 predict from A:", m1.predict_top_k("A", k=2))
+    print("Order-2 predict from (A,B):", m2.predict_top_k(("A", "B"), k=2))
+    adapter = Order2Adapter(m2)
+    adapter.set_context("A")
+    print("Adapter predict (prev=A, cur=B):", adapter.predict_categories("B", k=2))
+    print("Summaries:")
+    print(" order=1:", json.dumps(m1.summary(), indent=2))
+    print(" order=2:", json.dumps(m2.summary(), indent=2))
